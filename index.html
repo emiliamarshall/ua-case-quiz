@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="google-site-verification" content="s-us0WBsd2RDQq77dnaJPJxlZq_sqPsMJd0VfdC8Ga8" />
+
+<title>Ukrainian Noun Case Quiz</title>
+</head>
+<body>
+
+<h1>Ukrainian Noun Case Quiz</h1>
+<p>Тренажер відмінків іменників</p>
+
+<fieldset id="tier-filters">
+  <legend>Version / Версія</legend>
+</fieldset>
+
+<fieldset id="gender-filters">
+  <legend>Gender / Рід</legend>
+</fieldset>
+
+<fieldset id="number-filters">
+  <legend>Number / Число</legend>
+</fieldset>
+
+<fieldset id="case-filters">
+  <legend>Cases / Відмінки</legend>
+</fieldset>
+
+<button id="start-btn" disabled>Start</button>
+
+<div id="quiz-area" style="display:none;">
+  <p id="prompt"></p>
+  <input type="text" id="answer-input" autocomplete="off">
+  <button id="submit-btn">Submit</button>
+  <button id="next-btn" style="display:none;">Next question</button>
+  <p id="feedback"></p>
+</div>
+
+<p id="status">Loading...</p>
+
+<script>
+  let quizData = [];
+  let currentQuestion = null;
+  let quizStarted = false;
+
+  const CASE_LABELS = {
+    nominative:   "nominative (називний)",
+    genitive:     "genitive (родовий)",
+    dative:       "dative (давальний)",
+    accusative:   "accusative (знахідний)",
+    instrumental: "instrumental (орудний)",
+    locative:     "locative (місцевий)",
+    vocative:     "vocative (кличний)",
+  };
+
+  const GENDER_LABELS = {
+    masculine:   "masculine (чоловічий)",
+    feminine:    "feminine (жіночий)",
+    neuter:      "neuter (середній)",
+  };
+
+  const NUMBER_LABELS = {
+    singular: "singular (однина)",
+    plural:   "plural (множина)",
+  };
+
+  const CASE_NAMES = Object.keys(CASE_LABELS);
+  const GENDERS = Object.keys(GENDER_LABELS);
+  const NUMBERS = Object.keys(NUMBER_LABELS);
+  // NOTE: TIER_LABELS isn't a fixed constant like the others above --
+  // it's built dynamically once the data loads, so the word counts in
+  // the labels ("150 basic nouns") always reflect what's ACTUALLY in
+  // quiz_data.json rather than a hardcoded number that could go stale
+  // if the word list changes later.
+  let TIER_LABELS = {};
+
+  function stripAccents(str) {
+    return str.replace(/\u0301/g, "").toLowerCase().trim();
+  }
+
+  function buildCheckboxes(containerId, keys, labelMap, groupName) {
+    const container = document.getElementById(containerId);
+    keys.forEach((key) => {
+      const id = groupName + "-" + key;
+      const label = document.createElement("label");
+      label.style.display = "block";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = id;
+      checkbox.checked = true;
+      checkbox.dataset.group = groupName;
+      checkbox.dataset.value = key;
+      checkbox.addEventListener("change", function () {
+        if (quizStarted) showQuestion();
+      });
+
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(" " + labelMap[key]));
+      container.appendChild(label);
+    });
+  }
+
+  function getChecked(groupName) {
+    const boxes = document.querySelectorAll('input[data-group="' + groupName + '"]:checked');
+    return Array.from(boxes).map((box) => box.dataset.value);
+  }
+
+  function dictionaryForm(word) {
+    return word.cases.nominative.singular[0] || word.cases.nominative.plural[0];
+  }
+
+  function pickRandomQuestion() {
+    const selectedTiers = getChecked("tier");
+    const selectedCases = getChecked("case");
+    const selectedGenders = getChecked("gender");
+    const selectedNumbers = getChecked("number");
+
+    if (selectedTiers.length === 0 || selectedCases.length === 0 || selectedGenders.length === 0 || selectedNumbers.length === 0) {
+      return { error: "Select at least one option in every category to continue." };
+    }
+
+    const candidateWords = quizData.filter(
+      (w) => selectedTiers.includes(w.tier) && selectedGenders.includes(w.gender)
+    );
+    if (candidateWords.length === 0) {
+      return { error: "No words match the selected version/genders." };
+    }
+
+    for (let attempts = 0; attempts < 50; attempts++) {
+      const word = candidateWords[Math.floor(Math.random() * candidateWords.length)];
+      const caseName = selectedCases[Math.floor(Math.random() * selectedCases.length)];
+      const number = selectedNumbers[Math.floor(Math.random() * selectedNumbers.length)];
+      const forms = word.cases[caseName][number];
+      if (forms && forms.length > 0) {
+        return { word, caseName, number, forms };
+      }
+    }
+    return { error: "Couldn't find a matching question -- try selecting more options." };
+  }
+
+  function showQuestion() {
+    currentQuestion = pickRandomQuestion();
+
+    if (currentQuestion.error) {
+      document.getElementById("prompt").textContent = currentQuestion.error;
+      document.getElementById("answer-input").style.display = "none";
+      document.getElementById("submit-btn").style.display = "none";
+      document.getElementById("next-btn").style.display = "none";
+      return;
+    }
+
+    const base = dictionaryForm(currentQuestion.word);
+    document.getElementById("prompt").textContent =
+      CASE_LABELS[currentQuestion.caseName] + ", " + NUMBER_LABELS[currentQuestion.number] + ' of "' + base + '"';
+    document.getElementById("answer-input").style.display = "inline";
+    document.getElementById("answer-input").value = "";
+    document.getElementById("feedback").textContent = "";
+    document.getElementById("submit-btn").style.display = "inline";
+    document.getElementById("next-btn").style.display = "none";
+    document.getElementById("answer-input").focus();
+  }
+
+  function checkAnswer() {
+    const userAnswer = stripAccents(document.getElementById("answer-input").value);
+    const accepted = currentQuestion.forms.map(stripAccents);
+    const isCorrect = accepted.includes(userAnswer);
+
+    const displayForms = currentQuestion.forms.join(", ");
+    document.getElementById("feedback").textContent = isCorrect
+      ? "Правильно! (" + displayForms + ")"
+      : "Неправильно. Correct answer: " + displayForms;
+
+    document.getElementById("submit-btn").style.display = "none";
+    document.getElementById("next-btn").style.display = "inline";
+  }
+
+  document.getElementById("submit-btn").addEventListener("click", checkAnswer);
+  document.getElementById("next-btn").addEventListener("click", showQuestion);
+  document.getElementById("answer-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") checkAnswer();
+  });
+
+  document.getElementById("start-btn").addEventListener("click", function () {
+    quizStarted = true;
+    document.getElementById("quiz-area").style.display = "block";
+    document.getElementById("status").textContent = "";
+    showQuestion();
+  });
+
+  buildCheckboxes("gender-filters", GENDERS, GENDER_LABELS, "gender");
+  buildCheckboxes("number-filters", NUMBERS, NUMBER_LABELS, "number");
+  buildCheckboxes("case-filters", CASE_NAMES, CASE_LABELS, "case");
+
+  fetch("quiz_data.json")
+    .then((response) => response.json())
+    .then((data) => {
+      quizData = data;
+
+      const coreCount = quizData.filter((w) => w.tier === "core").length;
+      const extendedCount = quizData.filter((w) => w.tier === "extended").length;
+      TIER_LABELS = {
+        core: "Core (" + 150 + " basic nouns)",
+        extended: "Extended (" + 500 + " randomly selected nouns)",
+      };
+      buildCheckboxes("tier-filters", Object.keys(TIER_LABELS), TIER_LABELS, "tier");
+
+      document.getElementById("status").textContent = "Choose your filters, then press Start.";
+      document.getElementById("start-btn").disabled = false;
+    })
+    .catch((err) => {
+      document.getElementById("status").textContent =
+        "Couldn't load quiz_data.json -- make sure you're running this through " +
+        "'python -m http.server' and visiting localhost, not double-clicking the file.";
+      console.error(err);
+    });
+</script>
+
+</body>
+</html>
