@@ -11,38 +11,42 @@
 <h1>Ukrainian Noun Case Quiz</h1>
 <p>Тренажер відмінків іменників</p>
 
-<fieldset id="tier-filters">
-  <legend>Version / Версія</legend>
-</fieldset>
+<div id="setup-area">
+  <fieldset id="mode-filters"><legend>Mode / Режим</legend></fieldset>
+  <fieldset id="tier-filters"><legend>Version / Версія</legend></fieldset>
+  <fieldset id="gender-filters"><legend>Gender / Рід</legend></fieldset>
+  <fieldset id="number-filters"><legend>Number / Число</legend></fieldset>
+  <fieldset id="case-filters"><legend>Cases / Відмінки</legend></fieldset>
 
-<fieldset id="gender-filters">
-  <legend>Gender / Рід</legend>
-</fieldset>
-
-<fieldset id="number-filters">
-  <legend>Number / Число</legend>
-</fieldset>
-
-<fieldset id="case-filters">
-  <legend>Cases / Відмінки</legend>
-</fieldset>
-
-<button id="start-btn" disabled>Start</button>
-
-<div id="quiz-area" style="display:none;">
-  <p id="prompt"></p>
-  <input type="text" id="answer-input" autocomplete="off">
-  <button id="submit-btn">Submit</button>
-  <button id="next-btn" style="display:none;">Next question</button>
-  <p id="feedback"></p>
+  <button id="start-btn" disabled>Start</button>
+  <p id="status">Loading...</p>
 </div>
 
-<p id="status">Loading...</p>
+<div id="quiz-area" style="display:none;">
+  <p id="scoreboard">Correct: 0 | Incorrect: 0</p>
+  <p id="prompt"></p>
+
+  <div id="typed-area">
+    <input type="text" id="answer-input" autocomplete="off">
+    <button id="submit-btn">Submit</button>
+  </div>
+
+  <div id="choice-area" style="display:none;"></div>
+
+  <button id="next-btn" style="display:none;">Next question</button>
+  <p id="feedback"></p>
+  <p id="resources"></p>
+
+  <button id="start-over-btn">Start Over</button>
+</div>
 
 <script>
   let quizData = [];
   let currentQuestion = null;
   let quizStarted = false;
+  let correctCount = 0;
+  let incorrectCount = 0;
+  let askedQuestions = new Set(); // keys of "wordId|case|number" already asked this session
 
   const CASE_LABELS = {
     nominative:   "nominative (називний)",
@@ -55,9 +59,10 @@
   };
 
   const GENDER_LABELS = {
-    masculine:   "masculine (чоловічий)",
-    feminine:    "feminine (жіночий)",
-    neuter:      "neuter (середній)",
+    masculine:   "masculine (чоловічий рід)",
+    feminine:    "feminine (жіночий рід)",
+    neuter:      "neuter (середній рід)",
+    plural_only: "plural-only nouns, e.g. \"двері\" (множинний)",
   };
 
   const NUMBER_LABELS = {
@@ -65,38 +70,81 @@
     plural:   "plural (множина)",
   };
 
+  const MODE_LABELS = {
+    typed:  "Type the answer",
+    choice: "Multiple choice",
+  };
+
   const CASE_NAMES = Object.keys(CASE_LABELS);
   const GENDERS = Object.keys(GENDER_LABELS);
   const NUMBERS = Object.keys(NUMBER_LABELS);
-  // NOTE: TIER_LABELS isn't a fixed constant like the others above --
-  // it's built dynamically once the data loads, so the word counts in
-  // the labels ("150 basic nouns") always reflect what's ACTUALLY in
-  // quiz_data.json rather than a hardcoded number that could go stale
-  // if the word list changes later.
+  const MODES = Object.keys(MODE_LABELS);
   let TIER_LABELS = {};
 
-  function stripAccents(str) {
-    return str.replace(/\u0301/g, "").toLowerCase().trim();
+  // Learning-resource links shown after a WRONG answer, chosen based
+  // on the gender and case of the question just missed. plural_only
+  // has no entry on purpose -- no link was given for it, so it's
+  // simply skipped rather than guessed at.
+  const GENDER_RESOURCES = {
+    masculine: { label: "chart of masculine noun cases", url: "https://www.ukrainianlanguage.org.uk/read/unit07/page6-5.htm" },
+    feminine:  { label: "chart of feminine noun cases",  url: "https://www.ukrainianlanguage.org.uk/read/unit07/page6-4.htm" },
+    neuter:    { label: "chart of neuter noun cases",    url: "https://www.ukrainianlanguage.org.uk/read/unit07/page6-6.htm" },
+  };
+
+  const CASE_RESOURCES = {
+    nominative:   { label: "explanation of the nominative case",   url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-1.htm" },
+    genitive:     { label: "explanation of the genitive case",     url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-3.htm" },
+    dative:       { label: "explanation of the dative case",       url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-5.htm" },
+    accusative:   { label: "explanation of the accusative case",   url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-4.htm" },
+    instrumental: { label: "explanation of the instrumental case", url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-6.htm" },
+    locative:     { label: "explanation of the locative case",     url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-2.htm" },
+    vocative:     { label: "explanation of the vocative case",     url: "https://www.ukrainianlanguage.org.uk/read/unit07/page7-7.htm" },
+  };
+
+  function normalizeAnswer(str) {
+    return str
+      .replace(/\u0301/g, "")
+      .replace(/[\u2019\u02BC\u0060\u00B4]/g, "'")
+      .toLowerCase()
+      .trim();
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
   }
 
   function buildCheckboxes(containerId, keys, labelMap, groupName) {
     const container = document.getElementById(containerId);
     keys.forEach((key) => {
-      const id = groupName + "-" + key;
       const label = document.createElement("label");
       label.style.display = "block";
-
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
-      checkbox.id = id;
-      checkbox.checked = true;
+      checkbox.checked = false; // start deselected -- you choose what to practice
       checkbox.dataset.group = groupName;
       checkbox.dataset.value = key;
-      checkbox.addEventListener("change", function () {
-        if (quizStarted) showQuestion();
-      });
-
       label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(" " + labelMap[key]));
+      container.appendChild(label);
+    });
+  }
+
+  function buildRadios(containerId, keys, labelMap, groupName, defaultKey) {
+    const container = document.getElementById(containerId);
+    keys.forEach((key) => {
+      const label = document.createElement("label");
+      label.style.display = "block";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = groupName;
+      radio.checked = key === defaultKey;
+      radio.dataset.group = groupName;
+      radio.dataset.value = key;
+      label.appendChild(radio);
       label.appendChild(document.createTextNode(" " + labelMap[key]));
       container.appendChild(label);
     });
@@ -107,11 +155,21 @@
     return Array.from(boxes).map((box) => box.dataset.value);
   }
 
+  function getSelectedMode() {
+    const checked = document.querySelector('input[data-group="mode"]:checked');
+    return checked ? checked.dataset.value : "typed";
+  }
+
   function dictionaryForm(word) {
     return word.cases.nominative.singular[0] || word.cases.nominative.plural[0];
   }
 
-  function pickRandomQuestion() {
+  // Enumerate EVERY (word, case, number) combination that matches the
+  // current filters and hasn't been asked yet this session. We do a
+  // full enumeration (rather than random-guess-and-retry) specifically
+  // so we can reliably detect "you've used up every question" instead
+  // of just failing after a fixed number of guesses.
+  function getValidCombos() {
     const selectedTiers = getChecked("tier");
     const selectedCases = getChecked("case");
     const selectedGenders = getChecked("gender");
@@ -128,25 +186,94 @@
       return { error: "No words match the selected version/genders." };
     }
 
-    for (let attempts = 0; attempts < 50; attempts++) {
-      const word = candidateWords[Math.floor(Math.random() * candidateWords.length)];
-      const caseName = selectedCases[Math.floor(Math.random() * selectedCases.length)];
-      const number = selectedNumbers[Math.floor(Math.random() * selectedNumbers.length)];
-      const forms = word.cases[caseName][number];
-      if (forms && forms.length > 0) {
-        return { word, caseName, number, forms };
+    const combos = [];
+    for (const word of candidateWords) {
+      for (const caseName of selectedCases) {
+        for (const number of selectedNumbers) {
+          const forms = word.cases[caseName][number];
+          if (forms && forms.length > 0) {
+            const key = word._id + "|" + caseName + "|" + number;
+            if (!askedQuestions.has(key)) {
+              combos.push({ word, caseName, number, forms, key });
+            }
+          }
+        }
       }
     }
-    return { error: "Couldn't find a matching question -- try selecting more options." };
+
+    if (combos.length === 0) {
+      return { error: 'You\'ve answered every available question for these filters! Press "Start Over" to reset and try again.' };
+    }
+
+    return { combos };
+  }
+
+  function pickRandomQuestion() {
+    const result = getValidCombos();
+    if (result.error) return { error: result.error };
+    const chosen = result.combos[Math.floor(Math.random() * result.combos.length)];
+    askedQuestions.add(chosen.key);
+    return chosen;
+  }
+
+  // --- Multiple-choice distractor generation ---
+  function collectAllForms(word) {
+    const all = [];
+    for (const caseName of Object.keys(word.cases)) {
+      for (const number of NUMBERS) {
+        const forms = word.cases[caseName][number];
+        if (forms) all.push(...forms);
+      }
+    }
+    return all;
+  }
+
+  function generateChoices(question) {
+    const correct = question.forms[0];
+    const seen = new Set(question.forms.map(normalizeAnswer));
+    let pool = collectAllForms(question.word).filter((f) => !seen.has(normalizeAnswer(f)));
+    shuffle(pool);
+
+    const distractors = [];
+    for (const f of pool) {
+      const norm = normalizeAnswer(f);
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      distractors.push(f);
+      if (distractors.length >= 3) break;
+    }
+
+    let attempts = 0;
+    while (distractors.length < 3 && attempts < 200) {
+      attempts++;
+      const other = quizData[Math.floor(Math.random() * quizData.length)];
+      if (other === question.word) continue;
+      const otherForms = other.cases[question.caseName][question.number];
+      if (!otherForms || otherForms.length === 0) continue;
+      const candidate = otherForms[0];
+      const norm = normalizeAnswer(candidate);
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      distractors.push(candidate);
+    }
+
+    return shuffle([correct, ...distractors]);
+  }
+
+  function updateScoreboard() {
+    document.getElementById("scoreboard").textContent =
+      "Correct: " + correctCount + " | Incorrect: " + incorrectCount;
   }
 
   function showQuestion() {
     currentQuestion = pickRandomQuestion();
+    const typedArea = document.getElementById("typed-area");
+    const choiceArea = document.getElementById("choice-area");
 
     if (currentQuestion.error) {
       document.getElementById("prompt").textContent = currentQuestion.error;
-      document.getElementById("answer-input").style.display = "none";
-      document.getElementById("submit-btn").style.display = "none";
+      typedArea.style.display = "none";
+      choiceArea.style.display = "none";
       document.getElementById("next-btn").style.display = "none";
       return;
     }
@@ -154,26 +281,98 @@
     const base = dictionaryForm(currentQuestion.word);
     document.getElementById("prompt").textContent =
       CASE_LABELS[currentQuestion.caseName] + ", " + NUMBER_LABELS[currentQuestion.number] + ' of "' + base + '"';
-    document.getElementById("answer-input").style.display = "inline";
-    document.getElementById("answer-input").value = "";
     document.getElementById("feedback").textContent = "";
-    document.getElementById("submit-btn").style.display = "inline";
+    document.getElementById("resources").innerHTML = "";
     document.getElementById("next-btn").style.display = "none";
-    document.getElementById("answer-input").focus();
+
+    const mode = getSelectedMode();
+    if (mode === "choice") {
+      typedArea.style.display = "none";
+      choiceArea.style.display = "block";
+      choiceArea.innerHTML = "";
+      generateChoices(currentQuestion).forEach((choiceText) => {
+        const btn = document.createElement("button");
+        btn.textContent = choiceText;
+        btn.style.display = "block";
+        btn.addEventListener("click", function () { checkChoiceAnswer(choiceText); });
+        choiceArea.appendChild(btn);
+      });
+    } else {
+      typedArea.style.display = "block";
+      choiceArea.style.display = "none";
+      document.getElementById("answer-input").value = "";
+      document.getElementById("answer-input").focus();
+    }
+  }
+
+  function showFeedback(isCorrect) {
+    if (isCorrect) correctCount++; else incorrectCount++;
+    updateScoreboard();
+    const displayForms = currentQuestion.forms.join(", ");
+    document.getElementById("feedback").textContent = isCorrect
+      ? "Correct! Правильно! (" + displayForms + ")"
+      : "Not quite. Неправильно. Correct answer: " + displayForms;
+
+    const resourcesEl = document.getElementById("resources");
+    resourcesEl.innerHTML = "";
+    if (!isCorrect) {
+      // Depending on the question: a gender resource (skipped for
+      // plural-only words, which have none), plus a case resource
+      // (always available, all 7 cases have a link).
+      const links = [];
+      const genderResource = GENDER_RESOURCES[currentQuestion.word.gender];
+      if (genderResource) links.push(genderResource);
+      const caseResource = CASE_RESOURCES[currentQuestion.caseName];
+      if (caseResource) links.push(caseResource);
+
+      if (links.length > 0) {
+        resourcesEl.appendChild(document.createTextNode("Learn more: "));
+        links.forEach((res, i) => {
+          const a = document.createElement("a");
+          a.href = res.url;
+          a.textContent = res.label;
+          a.target = "_blank";
+          a.rel = "noopener";
+          resourcesEl.appendChild(a);
+          if (i < links.length - 1) resourcesEl.appendChild(document.createTextNode(" | "));
+        });
+      }
+    }
+
+    document.getElementById("next-btn").style.display = "inline";
   }
 
   function checkAnswer() {
-    const userAnswer = stripAccents(document.getElementById("answer-input").value);
-    const accepted = currentQuestion.forms.map(stripAccents);
-    const isCorrect = accepted.includes(userAnswer);
-
-    const displayForms = currentQuestion.forms.join(", ");
-    document.getElementById("feedback").textContent = isCorrect
-      ? "Правильно! (" + displayForms + ")"
-      : "Неправильно. Correct answer: " + displayForms;
-
+    const userAnswer = normalizeAnswer(document.getElementById("answer-input").value);
+    const accepted = currentQuestion.forms.map(normalizeAnswer);
     document.getElementById("submit-btn").style.display = "none";
-    document.getElementById("next-btn").style.display = "inline";
+    showFeedback(accepted.includes(userAnswer));
+  }
+
+  function checkChoiceAnswer(selected) {
+    const accepted = currentQuestion.forms.map(normalizeAnswer);
+    const isCorrect = accepted.includes(normalizeAnswer(selected));
+    Array.from(document.getElementById("choice-area").children).forEach((btn) => (btn.disabled = true));
+    showFeedback(isCorrect);
+  }
+
+  function startQuiz() {
+    quizStarted = true;
+    correctCount = 0;
+    incorrectCount = 0;
+    askedQuestions = new Set();
+    updateScoreboard();
+    document.getElementById("setup-area").style.display = "none";
+    document.getElementById("quiz-area").style.display = "block";
+    window.scrollTo(0, 0);
+    showQuestion();
+  }
+
+  function startOver() {
+    quizStarted = false;
+    document.getElementById("quiz-area").style.display = "none";
+    document.getElementById("setup-area").style.display = "block";
+    window.scrollTo(0, 0);
   }
 
   document.getElementById("submit-btn").addEventListener("click", checkAnswer);
@@ -181,14 +380,10 @@
   document.getElementById("answer-input").addEventListener("keydown", function (e) {
     if (e.key === "Enter") checkAnswer();
   });
+  document.getElementById("start-btn").addEventListener("click", startQuiz);
+  document.getElementById("start-over-btn").addEventListener("click", startOver);
 
-  document.getElementById("start-btn").addEventListener("click", function () {
-    quizStarted = true;
-    document.getElementById("quiz-area").style.display = "block";
-    document.getElementById("status").textContent = "";
-    showQuestion();
-  });
-
+  buildRadios("mode-filters", MODES, MODE_LABELS, "mode", "typed");
   buildCheckboxes("gender-filters", GENDERS, GENDER_LABELS, "gender");
   buildCheckboxes("number-filters", NUMBERS, NUMBER_LABELS, "number");
   buildCheckboxes("case-filters", CASE_NAMES, CASE_LABELS, "case");
@@ -197,12 +392,13 @@
     .then((response) => response.json())
     .then((data) => {
       quizData = data;
+      quizData.forEach((w, i) => { w._id = i; }); // stable id per word, used for the no-repeat tracking
 
       const coreCount = quizData.filter((w) => w.tier === "core").length;
       const extendedCount = quizData.filter((w) => w.tier === "extended").length;
       TIER_LABELS = {
-        core: "Core (" + 150 + " basic nouns)",
-        extended: "Extended (" + 500 + " randomly selected nouns)",
+        core: "Core (" + coreCount + " basic nouns)",
+        extended: "Extended (" + extendedCount + " randomly selected nouns)",
       };
       buildCheckboxes("tier-filters", Object.keys(TIER_LABELS), TIER_LABELS, "tier");
 
